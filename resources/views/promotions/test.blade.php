@@ -6,12 +6,18 @@
 
     <form id="promo-form" class="space-y-4">
         <div>
-            <label class="block text-sm font-medium mb-1">เลือกโปรโมชัน (ใส่ id หรือ name)</label>
-            <div class="grid grid-cols-2 gap-3">
-                <input type="number" name="promotion_id" placeholder="เช่น 1" class="px-3 py-2 border border-[#e3e3e0] dark:border-[#3E3E3A] rounded-sm bg-white dark:bg-[#161615]" />
-                <input type="text" name="promotion_name" placeholder="เช่น โปรโมชันรับเครดิตคืนเมื่อแพ้หมด" class="px-3 py-2 border border-[#e3e3e0] dark:border-[#3E3E3A] rounded-sm bg-white dark:bg-[#161615]" />
-            </div>
-            <p class="text-xs text-[#706f6c] dark:text-[#A1A09A] mt-1">เลือกด้วย ID หรือชื่อโปรโมชัน</p>
+            <label class="block text-sm font-medium mb-1">เลือกโปรโมชัน (ชื่อโปรโมชัน)</label>
+            <select id="promotion_select" class="w-full px-3 py-2 border border-[#e3e3e0] dark:border-[#3E3E3A] rounded-sm bg-white dark:bg-[#161615]">
+                <option value="">— เลือกโปรโมชัน —</option>
+                @foreach(($promotions ?? []) as $p)
+                    <option value="{{ $p->id }}">#{{ $p->id }} — {{ $p->name }}</option>
+                @endforeach
+            </select>
+            <p class="text-xs text-[#706f6c] dark:text-[#A1A09A] mt-1">จะแนบ ID ของโปรโมชันที่เลือกไปในการคำนวณให้อัตโนมัติ</p>
+        </div>
+        <div class="hidden">
+            <input type="number" name="promotion_id" />
+            <input type="text" name="promotion_name" />
         </div>
         <div>
             <label class="block text-sm font-medium mb-1">ยอดแทง (Stake)</label>
@@ -38,6 +44,12 @@
 </div>
 
 <script>
+const selectEl = document.getElementById('promotion_select');
+selectEl.addEventListener('change', () => {
+    const idInput = document.querySelector('input[name="promotion_id"]');
+    idInput.value = selectEl.value || '';
+});
+
 document.getElementById('promo-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -45,7 +57,6 @@ document.getElementById('promo-form').addEventListener('submit', async (e) => {
         stake: parseFloat(form.stake.value || '0'),
         selections: JSON.parse(form.selections.value || '[]'),
         promotion_id: form.promotion_id.value ? parseInt(form.promotion_id.value, 10) : undefined,
-        promotion_name: (form.promotion_name.value || '').trim(),
     };
     const res = await fetch('/api/promotion/evaluate', {
         method: 'POST',

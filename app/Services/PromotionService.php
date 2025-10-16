@@ -277,7 +277,6 @@ class PromotionService
             'promotion' => $activePromotion ? [
                 'id' => $activePromotion->id,
                 'name' => $activePromotion->name,
-                'type' => $activePromotion->type,
             ] : null,
         ];
     }

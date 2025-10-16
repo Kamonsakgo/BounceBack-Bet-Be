@@ -9,8 +9,11 @@ Route::get('/', function () {
     return view('home', compact('promotions'));
 });
 
-// FE page to test promotion evaluate/payout
-Route::view('/promotions/test', 'promotions.test');
+// FE page to test promotion evaluate/payout (load promotions for select)
+Route::get('/promotions/test', function () {
+    $promotions = DB::table('promotions')->orderBy('priority', 'asc')->orderBy('id', 'asc')->get();
+    return view('promotions.test', compact('promotions'));
+});
 Route::get('/promotions/create', [PromotionController::class, 'create']);
 Route::post('/promotions', [PromotionController::class, 'store'])->name('promotions.store');
 
