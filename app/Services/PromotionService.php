@@ -27,12 +27,64 @@ class PromotionService
 
         $reasons = [];
 
-        // อ่านค่าตั้งค่าทั้งหมดจากฐานข้อมูล (ตาราง: PromotionSetting) ครั้งเดียว พร้อมค่าเริ่มต้นสำรอง
-        // หากยังไม่ได้สร้างตาราง จะใช้ค่าเริ่มต้นและไม่คิวรีฐานข้อมูล
+        // 1) พยายามอ่านค่าจากตาราง promotions (โปรโมชันหลายแบบ) ก่อน
+        // เงื่อนไข: type = lose_all_refund, is_active = true, อยู่ในช่วงเวลา, เรียงลำดับตาม priority
         $settings = [];
-        if (Schema::hasTable('PromotionSetting')) {
-            $settings = DB::table('PromotionSetting')->pluck('value', 'key')->toArray();
+        $activePromotion = null;
+        if (Schema::hasTable('promotions')) {
+            $now = now();
+            // allow selecting by promotion_code or promotion_type from payload
+            $requestedId = isset($payload['promotion_id']) ? (int)$payload['promotion_id'] : null;
+            $requestedName = isset($payload['promotion_name']) ? (string)$payload['promotion_name'] : null;
+
+            $query = DB::table('promotions')
+                ->where('is_active', true)
+                ->where(function ($q) use ($now) {
+                    $q->whereNull('starts_at')->orWhere('starts_at', '<=', $now);
+                })
+                ->where(function ($q) use ($now) {
+                    $q->whereNull('ends_at')->orWhere('ends_at', '>=', $now);
+                })
+                ->orderBy('priority', 'asc');
+
+            if (!empty($requestedId)) {
+                $query->where('id', $requestedId);
+            } elseif (!empty($requestedName)) {
+                $query->where('name', $requestedName);
+            }
+
+            $activePromotion = $query->first();
+
+            if ($activePromotion && isset($activePromotion->settings)) {
+                $decoded = json_decode($activePromotion->settings, true);
+                if (is_array($decoded)) {
+                    $settings = $decoded;
+                }
+            }
         }
+
+        // ตรวจสอบตารางเวลาการเปิดโปรโมชัน (promotion_schedules)
+        if ($activePromotion && Schema::hasTable('promotion_schedules')) {
+            $now = now();
+            $dow = (int)$now->dayOfWeek; // 0..6
+            $currentTime = $now->format('H:i:s');
+            $hasSchedules = DB::table('promotion_schedules')
+                ->where('promotion_id', $activePromotion->id)
+                ->exists();
+            if ($hasSchedules) {
+                $isOpenNow = DB::table('promotion_schedules')
+                    ->where('promotion_id', $activePromotion->id)
+                    ->where('day_of_week', $dow)
+                    ->where('start_time', '<=', $currentTime)
+                    ->where('end_time', '>=', $currentTime)
+                    ->exists();
+                if (!$isOpenNow) {
+                    $reasons[] = 'เวลาไม่อยู่ในช่วงเปิดโปรโมชันวันนี้ | Promotion is closed at this time';
+                }
+            }
+        }
+
+        // 2) ไม่ fallback ไปที่ promotion_settings อีกต่อไป (เลิกใช้ตารางนั้น)
 
         $minStakeVal = $settings['min_stake'] ?? null;
         $minStake = is_numeric($minStakeVal) ? (float)$minStakeVal : 100.0;
@@ -40,10 +92,17 @@ class PromotionService
         $minOddsVal = $settings['min_odds'] ?? null;
         $minOdds = is_numeric($minOddsVal) ? (float)$minOddsVal : 1.85;
 
-        $allowedMarketsCsv = $settings['allowed_markets'] ?? null;
-        $allowedMarkets = is_string($allowedMarketsCsv) && trim($allowedMarketsCsv) !== ''
-            ? array_values(array_filter(array_map(fn($m) => strtolower(trim($m)), explode(',', $allowedMarketsCsv))))
-            : ['handicap', 'over_under'];
+        // allowed_markets อาจมาเป็น array (จาก promotions.settings) หรือ string csv (จาก key-value)
+        $allowedMarketsRaw = $settings['allowed_markets'] ?? null;
+        if (is_array($allowedMarketsRaw)) {
+            $allowedMarkets = array_values(array_filter(array_map(fn($m) => strtolower(trim((string)$m)), $allowedMarketsRaw)));
+        } elseif (is_string($allowedMarketsRaw) && trim($allowedMarketsRaw) !== '') {
+            $allowedMarkets = array_values(array_filter(array_map(fn($m) => strtolower(trim($m)), explode(',', $allowedMarketsRaw))));
+        } else {
+            $allowedMarkets = ['handicap', 'over_under'];
+        }
+        // รองรับค่า 'all' เพื่ออนุญาตทุกตลาด
+        $allowAllMarkets = in_array('all', $allowedMarkets, true);
 
         $requiredPeriodVal = $settings['required_period'] ?? null;
         $requiredPeriod = is_string($requiredPeriodVal) && $requiredPeriodVal !== '' ? strtolower($requiredPeriodVal) : 'full_time';
@@ -52,14 +111,21 @@ class PromotionService
         $value = $settings['min_selections'] ?? null;
         $minSelections = is_numeric($value) ? (int)$value : 5;
 
-        // กีฬาอนุญาต: อ่านจาก allowed_sports (csv: football,mpy) ถ้าไม่มีให้ default เป็น football เท่านั้น
-        $allowedSportsCsv = $settings['allowed_sports'] ?? 'football,mpy';
-        $allowedSports = is_string($allowedSportsCsv) && trim($allowedSportsCsv) !== ''
-            ? array_values(array_filter(array_map(fn($s) => strtolower(trim($s)), explode(',', $allowedSportsCsv))))
-            : ['football'];
+        // กีฬาอนุญาต: อาจมาเป็น array หรือ csv string
+        $allowedSportsRaw = $settings['allowed_sports'] ?? 'football,mpy';
+        if (is_array($allowedSportsRaw)) {
+            $allowedSports = array_values(array_filter(array_map(fn($s) => strtolower(trim((string)$s)), $allowedSportsRaw)));
+        } elseif (is_string($allowedSportsRaw) && trim($allowedSportsRaw) !== '') {
+            $allowedSports = array_values(array_filter(array_map(fn($s) => strtolower(trim($s)), explode(',', $allowedSportsRaw))));
+        } else {
+            $allowedSports = ['football'];
+        }
+
+        // รองรับค่า 'all' เพื่ออนุญาตทุกกีฬา
+        $allowAllSports = in_array('all', $allowedSports, true);
 
         // ตัวคูณเครดิตคืนกรณี "ผิดหมดทุกคู่"
-        // อ่านจากคีย์ใน DB: multiplier_5 ... multiplier_10 (ตาราง `PromotionSetting`) พร้อมค่าเริ่มต้นสำรอง
+        // รองรับรูปแบบจาก promotions.settings.multipliers (array) หรือจาก key-value: multiplier_5 ... multiplier_10
         $defaultMultipliers = [
             5 => 2.0,
             6 => 5.0,
@@ -69,9 +135,16 @@ class PromotionService
             10 => 30.0,
         ];
         $multipliersByCount = [];
-        foreach ($defaultMultipliers as $countKey => $defaultValue) {
-            $dbVal = $settings['multiplier_' . $countKey] ?? null;
-            $multipliersByCount[$countKey] = is_numeric($dbVal) ? (float)$dbVal : $defaultValue;
+        if (isset($settings['multipliers']) && is_array($settings['multipliers'])) {
+            foreach ($defaultMultipliers as $countKey => $defaultValue) {
+                $val = $settings['multipliers'][$countKey] ?? null;
+                $multipliersByCount[$countKey] = is_numeric($val) ? (float)$val : $defaultValue;
+            }
+        } else {
+            foreach ($defaultMultipliers as $countKey => $defaultValue) {
+                $dbVal = $settings['multiplier_' . $countKey] ?? null;
+                $multipliersByCount[$countKey] = is_numeric($dbVal) ? (float)$dbVal : $defaultValue;
+            }
         }
 
         // ตรวจเงื่อนไข: ยอดเดิมพันขั้นต่ำ
@@ -82,7 +155,7 @@ class PromotionService
 
         // ตรวจเงื่อนไข: กีฬา (ทั้งระดับบิลและรายคู่ต้องอยู่ใน allowed_sports)
         $billSport = strtolower($sport);
-        $sportsEligible = in_array($billSport, $allowedSports, true) || $billSport === '';
+        $sportsEligible = $allowAllSports || in_array($billSport, $allowedSports, true) || $billSport === '';
 
         // ตรวจเงื่อนไข: จำนวนคู่ขั้นต่ำ และคุณสมบัติของคู่ที่แทง
         if (!is_array($selections) || count($selections) < $minSelections) {
@@ -107,7 +180,7 @@ class PromotionService
             $status = strtolower((string)($sel['status'] ?? 'accept'));
             // กีฬาในระดับคู่ ถ้าไม่ได้ส่งมาก็ใช้ของบิล
             $selSport = strtolower((string)($sel['sport'] ?? $billSport));
-            if (!in_array($selSport, $allowedSports, true)) {
+            if (!$allowAllSports && !in_array($selSport, $allowedSports, true)) {
                 $sportsEligible = false;
             }
 
@@ -117,7 +190,7 @@ class PromotionService
             if ($result !== 'lose') {
                 $allLose = false;
             }
-            if (!in_array($market, $allowedMarkets, true)) {
+            if (!$allowAllMarkets && !in_array($market, $allowedMarkets, true)) {
                 $allMarketsEligible = false;
             }
             if ($period !== $requiredPeriod) {
@@ -129,7 +202,9 @@ class PromotionService
         }
 
         if (!$sportsEligible) {
-            $reasons[] = 'กีฬาไม่เข้าเงื่อนไข (อนุญาต: ' . implode(',', $allowedSports) . ') | Only allowed sports: ' . implode(',', $allowedSports);
+            $list = array_values(array_filter($allowedSports, fn($s) => $s !== 'all'));
+            $listStr = empty($list) ? 'ทุกกีฬา' : implode(',', $list);
+            $reasons[] = 'กีฬาไม่เข้าเงื่อนไข (อนุญาต: ' . $listStr . ') | Only allowed sports: ' . $listStr;
         }
         if ($hasVoidOrCancelled) {
             $reasons[] = 'มีคู่ที่โมฆะ/ยกเลิก ทำให้บิลไม่เข้าเงื่อนไข | Any void/cancelled selection disqualifies the bill';
@@ -138,7 +213,9 @@ class PromotionService
             $reasons[] = 'ทุกรายการต้องแพ้ (lose) เท่านั้น | All selections must be a full loss';
         }
         if (!$allMarketsEligible) {
-            $reasons[] = 'นับเฉพาะตลาดแฮนดิแคปหรือสูง/ต่ำเท่านั้น | Only handicap or over/under markets are eligible';
+            $mk = array_values(array_filter($allowedMarkets, fn($m) => $m !== 'all'));
+            $mkStr = empty($mk) ? 'ทุกตลาด' : implode(',', $mk);
+            $reasons[] = 'ตลาดไม่เข้าเงื่อนไข (อนุญาต: ' . $mkStr . ') | Only allowed markets: ' . $mkStr;
         }
         if (!$allPeriodsEligible) {
             $reasons[] = 'นับเฉพาะเต็มเวลา (full_time) เท่านั้น | Only full-time markets are eligible';
@@ -163,10 +240,25 @@ class PromotionService
             $refund = $stake * $multiplier;
         }
 
-        // จำกัดวงเงินจ่ายคืนต่อวัน (อ่านจาก 'max_payout_per_day' หรือใช้ค่าเริ่มต้น 50,000)
-        $maxPayoutVal = $settings['max_payout_per_day'] ?? null;
-        $maxPayoutPerDay = is_numeric($maxPayoutVal) ? (float)$maxPayoutVal : 50000.0;
-        $cappedRefund = min($refund, $maxPayoutPerDay);
+        // Cap ตามคอลัมน์ใน promotions: ต่อบิล/ต่อวัน/ต่อผู้ใช้ (ถ้ามีค่า)
+        $maxPayoutPerBill = null;
+        $maxPayoutPerDay = null;
+        $maxPayoutPerUser = null;
+        if ($activePromotion) {
+            // บาง DB driver จะคืนค่าเป็น string -> แปลงเป็น float ถ้าเป็นตัวเลข
+            $maxPayoutPerBill = is_numeric($activePromotion->max_payout_per_bill ?? null)
+                ? (float)$activePromotion->max_payout_per_bill : null;
+            $maxPayoutPerDay = is_numeric($activePromotion->max_payout_per_day ?? null)
+                ? (float)$activePromotion->max_payout_per_day : null;
+            $maxPayoutPerUser = is_numeric($activePromotion->max_payout_per_user ?? null)
+                ? (float)$activePromotion->max_payout_per_user : null;
+        }
+
+        // ตอนนี้บังคับใช้ cap ต่อบิลทันที (per-day และ per-user ให้ชั้นเรียกใช้ไปจัดการ aggregation)
+        $cappedRefund = $refund;
+        if ($maxPayoutPerBill !== null) {
+            $cappedRefund = min($cappedRefund, $maxPayoutPerBill);
+        }
 
         return [
             'eligible' => $eligible,
@@ -176,6 +268,17 @@ class PromotionService
             'stake' => $stake,
             'computedRefund' => $refund,
             'cappedRefund' => $cappedRefund,
+            'caps' => [
+                'maxPayoutPerBill' => $maxPayoutPerBill,
+                'maxPayoutPerDay' => $maxPayoutPerDay,
+                'maxPayoutPerUser' => $maxPayoutPerUser,
+            ],
+            // metadata เพื่อช่วยระบบภายนอกทำ aggregation cap ต่อวัน/ต่อผู้ใช้
+            'promotion' => $activePromotion ? [
+                'id' => $activePromotion->id,
+                'name' => $activePromotion->name,
+                'type' => $activePromotion->type,
+            ] : null,
         ];
     }
 }
