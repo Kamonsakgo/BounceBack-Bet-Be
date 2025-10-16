@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\DB;
+
 class PromotionService
 {
     /**
@@ -25,16 +27,31 @@ class PromotionService
 
         $reasons = [];
 
-        // Configurable parameters (can be externalized to config if needed)
-        $minStake = 100.0;
-        $minOdds = 1.85;
-        $allowedMarkets = ['handicap', 'over_under'];
-        $requiredPeriod = 'full_time';
-        $minSelections = 5;
-        $footballOnly = true; // Set to false to allow other sports like muaythai
+        // Read configurable parameters from DB (table: prsetting) with fallbacks
+        $minStakeVal = DB::table('PromotionSetting')->where('key', 'min_stake')->value('value');
+        $minStake = is_numeric($minStakeVal) ? (float)$minStakeVal : 100.0;
+
+        $minOddsVal = DB::table('PromotionSetting')->where('key', 'min_odds')->value('value');
+        $minOdds = is_numeric($minOddsVal) ? (float)$minOddsVal : 1.85;
+
+        $allowedMarketsCsv = DB::table('PromotionSetting')->where('key', 'allowed_markets')->value('value');
+        $allowedMarkets = is_string($allowedMarketsCsv) && trim($allowedMarketsCsv) !== ''
+            ? array_values(array_filter(array_map(fn($m) => strtolower(trim($m)), explode(',', $allowedMarketsCsv))))
+            : ['handicap', 'over_under'];
+
+        $requiredPeriodVal = DB::table('PromotionSetting')->where('key', 'required_period')->value('value');
+        $requiredPeriod = is_string($requiredPeriodVal) && $requiredPeriodVal !== '' ? strtolower($requiredPeriodVal) : 'full_time';
+
+        // Read minimum selections from database with fallback
+        $value = DB::table('PromotionSetting')->where('key', 'min_selections')->value('value');
+        $minSelections = is_numeric($value) ? (int)$value : 5;
+
+        $footballOnlyVal = DB::table('PromotionSetting')->where('key', 'football_only')->value('value');
+        $footballOnly = in_array(strtolower((string)$footballOnlyVal), ['1', 'true', 'yes'], true) ? true : (strtolower((string)$footballOnlyVal) === '0' || strtolower((string)$footballOnlyVal) === 'false' ? false : true);
 
         // Multipliers for "wrong all" refunds (credit back multipliers)
-        $multipliersByCount = [
+        // Read from DB keys: multiplier_5 ... multiplier_10 in table `prsetting`, fallback to defaults
+        $defaultMultipliers = [
             5 => 2.0,
             6 => 5.0,
             7 => 7.0,
@@ -42,10 +59,15 @@ class PromotionService
             9 => 15.0,
             10 => 30.0,
         ];
+        $multipliersByCount = [];
+        foreach ($defaultMultipliers as $countKey => $defaultValue) {
+            $dbVal = DB::table('PromotionSetting')->where('key', 'multiplier_' . $countKey)->value('value');
+            $multipliersByCount[$countKey] = is_numeric($dbVal) ? (float)$dbVal : $defaultValue;
+        }
 
         // Guard: stake
         if ($stake < $minStake) {
-            $reasons[] = 'Stake must be at least 100';
+            $reasons[] = 'Stake must be at least ' . rtrim(rtrim(number_format($minStake, 2, '.', ''), '0'), '.');
         }
 
         // Guard: sport restriction (per promo wording: football bills only)
@@ -100,7 +122,7 @@ class PromotionService
             $reasons[] = 'Only full-time markets are eligible';
         }
         if (!$allOddsEligible) {
-            $reasons[] = 'Each selection odds must be >= 1.85';
+            $reasons[] = 'Each selection odds must be >= ' . rtrim(rtrim(number_format($minOdds, 2, '.', ''), '0'), '.');
         }
 
         $count = is_array($selections) ? count($selections) : 0;
@@ -118,9 +140,9 @@ class PromotionService
             $refund = $stake * $multiplier;
         }
 
-        // Cap payout per day (business rule mentions 50,000). Actual per-user/day tracking
-        // requires persistence which is out of scope here. We cap the computed amount.
-        $maxPayoutPerDay = 50000.0;
+        // Cap payout per day (business rule mentions 50,000) or read from DB 'max_payout_per_day'
+        $maxPayoutVal = DB::table('PromotionSetting')->where('key', 'max_payout_per_day')->value('value');
+        $maxPayoutPerDay = is_numeric($maxPayoutVal) ? (float)$maxPayoutVal : 50000.0;
         $cappedRefund = min($refund, $maxPayoutPerDay);
 
         return [
