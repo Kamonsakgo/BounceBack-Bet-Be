@@ -7,5 +7,4 @@ Route::get('/', function () {
     return view('welcome');
 });
 
-// API-like endpoint (no Sanctum by default):
-Route::post('api/promotion/evaluate', [PromotionController::class, 'evaluate']);
+// ย้าย API ไปที่ routes/api.php แล้ว

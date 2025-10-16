@@ -3,21 +3,21 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class PromotionService
 {
     /**
-     * Evaluate a step bet for the refund promotion.
+     * ประเมินสิทธิ์โปรโมชันรับเครดิตคืนสำหรับบิลสเต็ป
      *
-     * Expected payload shape:
-     * - stake: float (>= 100)
-     * - sport: string ('football' | 'muaythai')
-     * - selections: array<array{
-     *     result: 'lose'|'win'|'void',
-     *     market: 'handicap'|'over_under',
-     *     period: 'full_time',
-     *     odds: float
-     * }>
+     * โครงสร้างข้อมูลที่คาดหวัง (payload):
+     * - stake: จำนวนเงินเดิมพัน float (>= 100)
+     * - sport: ชนิดกีฬา string ('football' | 'muaythai')
+     * - selections: รายการคู่ที่แทง array ของอ็อบเจ็กต์ที่มีคีย์:
+     *     result: 'lose'|'win'|'void'
+     *     market: 'handicap'|'over_under'
+     *     period: 'full_time'
+     *     odds: ค่าน้ำ float
      */
     public function evaluate(array $payload): array
     {
@@ -27,30 +27,36 @@ class PromotionService
 
         $reasons = [];
 
-        // Read configurable parameters from DB (table: prsetting) with fallbacks
-        $minStakeVal = DB::table('PromotionSetting')->where('key', 'min_stake')->value('value');
+        // อ่านค่าตั้งค่าทั้งหมดจากฐานข้อมูล (ตาราง: PromotionSetting) ครั้งเดียว พร้อมค่าเริ่มต้นสำรอง
+        // หากยังไม่ได้สร้างตาราง จะใช้ค่าเริ่มต้นและไม่คิวรีฐานข้อมูล
+        $settings = [];
+        if (Schema::hasTable('PromotionSetting')) {
+            $settings = DB::table('PromotionSetting')->pluck('value', 'key')->toArray();
+        }
+
+        $minStakeVal = $settings['min_stake'] ?? null;
         $minStake = is_numeric($minStakeVal) ? (float)$minStakeVal : 100.0;
 
-        $minOddsVal = DB::table('PromotionSetting')->where('key', 'min_odds')->value('value');
+        $minOddsVal = $settings['min_odds'] ?? null;
         $minOdds = is_numeric($minOddsVal) ? (float)$minOddsVal : 1.85;
 
-        $allowedMarketsCsv = DB::table('PromotionSetting')->where('key', 'allowed_markets')->value('value');
+        $allowedMarketsCsv = $settings['allowed_markets'] ?? null;
         $allowedMarkets = is_string($allowedMarketsCsv) && trim($allowedMarketsCsv) !== ''
             ? array_values(array_filter(array_map(fn($m) => strtolower(trim($m)), explode(',', $allowedMarketsCsv))))
             : ['handicap', 'over_under'];
 
-        $requiredPeriodVal = DB::table('PromotionSetting')->where('key', 'required_period')->value('value');
+        $requiredPeriodVal = $settings['required_period'] ?? null;
         $requiredPeriod = is_string($requiredPeriodVal) && $requiredPeriodVal !== '' ? strtolower($requiredPeriodVal) : 'full_time';
 
-        // Read minimum selections from database with fallback
-        $value = DB::table('PromotionSetting')->where('key', 'min_selections')->value('value');
+        // อ่านจำนวนคู่ขั้นต่ำจากฐานข้อมูล พร้อม fallback
+        $value = $settings['min_selections'] ?? null;
         $minSelections = is_numeric($value) ? (int)$value : 5;
 
-        $footballOnlyVal = DB::table('PromotionSetting')->where('key', 'football_only')->value('value');
+        $footballOnlyVal = $settings['football_only'] ?? null;
         $footballOnly = in_array(strtolower((string)$footballOnlyVal), ['1', 'true', 'yes'], true) ? true : (strtolower((string)$footballOnlyVal) === '0' || strtolower((string)$footballOnlyVal) === 'false' ? false : true);
 
-        // Multipliers for "wrong all" refunds (credit back multipliers)
-        // Read from DB keys: multiplier_5 ... multiplier_10 in table `prsetting`, fallback to defaults
+        // ตัวคูณเครดิตคืนกรณี "ผิดหมดทุกคู่"
+        // อ่านจากคีย์ใน DB: multiplier_5 ... multiplier_10 (ตาราง `PromotionSetting`) พร้อมค่าเริ่มต้นสำรอง
         $defaultMultipliers = [
             5 => 2.0,
             6 => 5.0,
@@ -61,21 +67,21 @@ class PromotionService
         ];
         $multipliersByCount = [];
         foreach ($defaultMultipliers as $countKey => $defaultValue) {
-            $dbVal = DB::table('PromotionSetting')->where('key', 'multiplier_' . $countKey)->value('value');
+            $dbVal = $settings['multiplier_' . $countKey] ?? null;
             $multipliersByCount[$countKey] = is_numeric($dbVal) ? (float)$dbVal : $defaultValue;
         }
 
-        // Guard: stake
+        // ตรวจเงื่อนไข: ยอดเดิมพันขั้นต่ำ
         if ($stake < $minStake) {
             $reasons[] = 'Stake must be at least ' . rtrim(rtrim(number_format($minStake, 2, '.', ''), '0'), '.');
         }
 
-        // Guard: sport restriction (per promo wording: football bills only)
+        // ตรวจเงื่อนไข: จำกัดกีฬา (เฉพาะบิลฟุตบอล)
         if ($footballOnly && strtolower($sport) !== 'football') {
             $reasons[] = 'Only football bills are eligible';
         }
 
-        // Guard: selections count and properties
+        // ตรวจเงื่อนไข: จำนวนคู่ขั้นต่ำ และคุณสมบัติของคู่ที่แทง
         if (!is_array($selections) || count($selections) < $minSelections) {
             $reasons[] = 'Minimum selections not met (>= 5)';
         }
@@ -135,13 +141,13 @@ class PromotionService
 
         $refund = 0.0;
         if ($eligible) {
-            // Promotion text implies "receive credit back X times".
-            // We interpret as stake multiplied by the table value.
+            // ตีความตามโปรโมชัน: รับเครดิตคืนตามตัวคูณ X เท่า
+            // คำนวณโดยใช้ stake * multiplier
             $refund = $stake * $multiplier;
         }
 
-        // Cap payout per day (business rule mentions 50,000) or read from DB 'max_payout_per_day'
-        $maxPayoutVal = DB::table('PromotionSetting')->where('key', 'max_payout_per_day')->value('value');
+        // จำกัดวงเงินจ่ายคืนต่อวัน (อ่านจาก 'max_payout_per_day' หรือใช้ค่าเริ่มต้น 50,000)
+        $maxPayoutVal = $settings['max_payout_per_day'] ?? null;
         $maxPayoutPerDay = is_numeric($maxPayoutVal) ? (float)$maxPayoutVal : 50000.0;
         $cappedRefund = min($refund, $maxPayoutPerDay);
 
