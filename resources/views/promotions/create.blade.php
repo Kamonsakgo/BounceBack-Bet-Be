@@ -8,8 +8,9 @@
         <div class="mb-4 px-4 py-2 bg-yellow-100 text-yellow-900 rounded-sm border border-yellow-300">{{ session('status') }}</div>
     @endif
 
-    <form method="POST" action="{{ route('promotions.store') }}" class="space-y-4">
+    <form method="POST" action="{{ route('promotions.store') }}" class="space-y-6 bg-white dark:bg-[#161615] border border-yellow-300 dark:border-yellow-700 rounded-lg p-6 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
         @csrf
+        <h2 class="text-sm uppercase tracking-wide text-[#706f6c] dark:text-[#A1A09A]">ข้อมูลพื้นฐาน</h2>
         <div class="grid grid-cols-2 gap-4">
             <div class="col-span-2">
                 <label class="block text-sm font-medium mb-1">ชื่อโปรโมชัน</label>
@@ -28,7 +29,9 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-4">
+        <div class="border-t border-yellow-300 dark:border-yellow-700 pt-6">
+            <h2 class="text-sm uppercase tracking-wide mb-4 text-[#706f6c] dark:text-[#A1A09A]">ช่วงเวลาโปรโมชัน</h2>
+            <div class="grid grid-cols-2 gap-4">
             <div>
                 <label class="block text-sm font-medium mb-1">เวลาเริ่ม</label>
                 <input type="datetime-local" name="starts_at" class="w-full px-3 py-2 border border-yellow-300 dark:border-yellow-700 rounded-sm focus:outline-none focus:ring-2 focus:ring-yellow-500" />
@@ -37,9 +40,12 @@
                 <label class="block text-sm font-medium mb-1">เวลาสิ้นสุด</label>
                 <input type="datetime-local" name="ends_at" class="w-full px-3 py-2 border border-yellow-300 dark:border-yellow-700 rounded-sm focus:outline-none focus:ring-2 focus:ring-yellow-500" />
             </div>
+            </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-4">
+        <div class="border-t border-yellow-300 dark:border-yellow-700 pt-6">
+            <h2 class="text-sm uppercase tracking-wide mb-4 text-[#706f6c] dark:text-[#A1A09A]">โควตาและงบประมาณ</h2>
+            <div class="grid grid-cols-3 gap-4">
             <div>
                 <label class="block text-sm font-medium mb-1">ลำดับความสำคัญ (เลขน้อยสำคัญกว่า)</label>
                 <input type="number" name="priority" value="100" class="w-full px-3 py-2 border border-yellow-300 dark:border-yellow-700 rounded-sm focus:outline-none focus:ring-2 focus:ring-yellow-500" />
@@ -52,9 +58,12 @@
                 <label class="block text-sm font-medium mb-1">งบประมาณรวม (ทั้งระบบ)</label>
                 <input type="number" step="0.01" name="global_budget" class="w-full px-3 py-2 border border-yellow-300 dark:border-yellow-700 rounded-sm focus:outline-none focus:ring-2 focus:ring-yellow-500" />
             </div>
+            </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-4">
+        <div class="border-t border-yellow-300 dark:border-yellow-700 pt-6">
+            <h2 class="text-sm uppercase tracking-wide mb-4 text-[#706f6c] dark:text-[#A1A09A]">เพดานการจ่าย</h2>
+            <div class="grid grid-cols-3 gap-4">
             <div>
                 <label class="block text-sm font-medium mb-1">เพดานจ่ายต่อบิล</label>
                 <input type="number" step="0.01" name="max_payout_per_bill" class="w-full px-3 py-2 border border-yellow-300 dark:border-yellow-700 rounded-sm focus:outline-none focus:ring-2 focus:ring-yellow-500" />
@@ -66,6 +75,7 @@
             <div>
                 <label class="block text-sm font-medium mb-1">เพดานจ่ายต่อผู้ใช้</label>
                 <input type="number" step="0.01" name="max_payout_per_user" class="w-full px-3 py-2 border border-yellow-300 dark:border-yellow-700 rounded-sm focus:outline-none focus:ring-2 focus:ring-yellow-500" />
+            </div>
             </div>
         </div>
 
@@ -101,7 +111,8 @@
             </div>
         </div>
 
-        <div>
+        <div class="border-t border-yellow-300 dark:border-yellow-700 pt-6">
+            <h2 class="text-sm uppercase tracking-wide mb-4 text-[#706f6c] dark:text-[#A1A09A]">การตั้งค่าเพิ่มเติม</h2>
             <label class="block text-sm font-medium mb-1">การตั้งค่า (JSON)</label>
             <textarea name="settings" rows="10" class="w-full px-3 py-2 border border-yellow-300 dark:border-yellow-700 rounded-sm focus:outline-none focus:ring-2 focus:ring-yellow-500">{
   "min_stake": 100,

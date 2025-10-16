@@ -28,7 +28,8 @@ class StorePromotionRequest extends FormRequest
             'max_payout_per_bill' => ['nullable','numeric','min:0'],
             'max_payout_per_day' => ['nullable','numeric','min:0'],
             'max_payout_per_user' => ['nullable','numeric','min:0'],
-            'settings' => ['required','array'],
+            // อนุญาตทั้งแบบ array (จาก JS) หรือ string JSON (จาก textarea)
+            'settings' => ['required'],
             // schedule (optional)
             'schedule_days' => ['sometimes','array'],
             'schedule_days.*' => ['integer','between:0,6'],
