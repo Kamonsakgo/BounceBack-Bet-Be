@@ -52,8 +52,11 @@ class PromotionService
         $value = $settings['min_selections'] ?? null;
         $minSelections = is_numeric($value) ? (int)$value : 5;
 
-        $footballOnlyVal = $settings['football_only'] ?? null;
-        $footballOnly = in_array(strtolower((string)$footballOnlyVal), ['1', 'true', 'yes'], true) ? true : (strtolower((string)$footballOnlyVal) === '0' || strtolower((string)$footballOnlyVal) === 'false' ? false : true);
+        // กีฬาอนุญาต: อ่านจาก allowed_sports (csv: football,mpy) ถ้าไม่มีให้ default เป็น football เท่านั้น
+        $allowedSportsCsv = $settings['allowed_sports'] ?? 'football,mpy';
+        $allowedSports = is_string($allowedSportsCsv) && trim($allowedSportsCsv) !== ''
+            ? array_values(array_filter(array_map(fn($s) => strtolower(trim($s)), explode(',', $allowedSportsCsv))))
+            : ['football'];
 
         // ตัวคูณเครดิตคืนกรณี "ผิดหมดทุกคู่"
         // อ่านจากคีย์ใน DB: multiplier_5 ... multiplier_10 (ตาราง `PromotionSetting`) พร้อมค่าเริ่มต้นสำรอง
@@ -73,13 +76,13 @@ class PromotionService
 
         // ตรวจเงื่อนไข: ยอดเดิมพันขั้นต่ำ
         if ($stake < $minStake) {
-            $reasons[] = 'Stake must be at least ' . rtrim(rtrim(number_format($minStake, 2, '.', ''), '0'), '.');
+            $minStr = rtrim(rtrim(number_format($minStake, 2, '.', ''), '0'), '.');
+            $reasons[] = 'ยอดแทงขั้นต่ำต้องไม่น้อยกว่า ' . $minStr . ' | Stake must be at least ' . $minStr;
         }
 
-        // ตรวจเงื่อนไข: จำกัดกีฬา (เฉพาะบิลฟุตบอล)
-        if ($footballOnly && strtolower($sport) !== 'football') {
-            $reasons[] = 'Only football bills are eligible';
-        }
+        // ตรวจเงื่อนไข: กีฬา (ทั้งระดับบิลและรายคู่ต้องอยู่ใน allowed_sports)
+        $billSport = strtolower($sport);
+        $sportsEligible = in_array($billSport, $allowedSports, true) || $billSport === '';
 
         // ตรวจเงื่อนไข: จำนวนคู่ขั้นต่ำ และคุณสมบัติของคู่ที่แทง
         if (!is_array($selections) || count($selections) < $minSelections) {
@@ -102,6 +105,11 @@ class PromotionService
             $odds = (float)($sel['odds'] ?? 0);
             // ถ้าส่ง status=cancel ให้ถือว่าโมฆะ/ยกเลิก
             $status = strtolower((string)($sel['status'] ?? 'accept'));
+            // กีฬาในระดับคู่ ถ้าไม่ได้ส่งมาก็ใช้ของบิล
+            $selSport = strtolower((string)($sel['sport'] ?? $billSport));
+            if (!in_array($selSport, $allowedSports, true)) {
+                $sportsEligible = false;
+            }
 
             if ($result === 'void' || $result === 'cancelled' || $result === 'canceled' || $status === 'cancel') {
                 $hasVoidOrCancelled = true;
@@ -120,26 +128,30 @@ class PromotionService
             }
         }
 
+        if (!$sportsEligible) {
+            $reasons[] = 'กีฬาไม่เข้าเงื่อนไข (อนุญาต: ' . implode(',', $allowedSports) . ') | Only allowed sports: ' . implode(',', $allowedSports);
+        }
         if ($hasVoidOrCancelled) {
-            $reasons[] = 'Any void/cancelled selection disqualifies the bill';
+            $reasons[] = 'มีคู่ที่โมฆะ/ยกเลิก ทำให้บิลไม่เข้าเงื่อนไข | Any void/cancelled selection disqualifies the bill';
         }
         if (!$allLose) {
-            $reasons[] = 'All selections must be a full loss';
+            $reasons[] = 'ทุกรายการต้องแพ้ (lose) เท่านั้น | All selections must be a full loss';
         }
         if (!$allMarketsEligible) {
-            $reasons[] = 'นับเฉพาะตลาดแฮนดิแคปหรือสูง/ต่ำเท่านั้น';
+            $reasons[] = 'นับเฉพาะตลาดแฮนดิแคปหรือสูง/ต่ำเท่านั้น | Only handicap or over/under markets are eligible';
         }
         if (!$allPeriodsEligible) {
-            $reasons[] = 'นับเฉพาะเต็มเวลา (full_time) เท่านั้น';
+            $reasons[] = 'นับเฉพาะเต็มเวลา (full_time) เท่านั้น | Only full-time markets are eligible';
         }
         if (!$allOddsEligible) {
-            $reasons[] = 'Each selection odds must be >= ' . rtrim(rtrim(number_format($minOdds, 2, '.', ''), '0'), '.');
+            $minOddsStr = rtrim(rtrim(number_format($minOdds, 2, '.', ''), '0'), '.');
+            $reasons[] = 'ค่าน้ำของแต่ละคู่ต้อง >= ' . $minOddsStr . ' | Each selection odds must be >= ' . $minOddsStr;
         }
 
         $count = is_array($selections) ? count($selections) : 0;
         $multiplier = $multipliersByCount[$count] ?? 0.0;
         if ($multiplier <= 0.0) {
-            $reasons[] = 'Selections count not eligible for promotion';
+            $reasons[] = 'จำนวนคู่ไม่เข้าเงื่อนไขของโปรโมชัน | Selections count not eligible for promotion';
         }
 
         $eligible = count($reasons) === 0;
