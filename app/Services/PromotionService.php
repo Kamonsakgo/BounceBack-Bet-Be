@@ -83,7 +83,7 @@ class PromotionService
 
         // ตรวจเงื่อนไข: จำนวนคู่ขั้นต่ำ และคุณสมบัติของคู่ที่แทง
         if (!is_array($selections) || count($selections) < $minSelections) {
-            $reasons[] = 'Minimum selections not met (>= 5)';
+            $reasons[] = 'จำนวนคู่ไม่ถึงขั้นต่ำ (ต้อง >= ' . $minSelections . ')';
         }
 
         $hasVoidOrCancelled = false;
@@ -94,11 +94,16 @@ class PromotionService
 
         foreach ($selections as $sel) {
             $result = strtolower((string)($sel['result'] ?? ''));
-            $market = strtolower((string)($sel['market'] ?? ''));
-            $period = strtolower((string)($sel['period'] ?? ''));
+            // รองรับทั้ง market และ market_type
+            $marketRaw = (string)($sel['market'] ?? ($sel['market_type'] ?? ''));
+            $market = strtolower($marketRaw);
+            // period ถ้าไม่ส่งมา ให้ถือเป็น full_time
+            $period = strtolower((string)($sel['period'] ?? 'full_time'));
             $odds = (float)($sel['odds'] ?? 0);
+            // ถ้าส่ง status=cancel ให้ถือว่าโมฆะ/ยกเลิก
+            $status = strtolower((string)($sel['status'] ?? 'accept'));
 
-            if ($result === 'void' || $result === 'cancelled' || $result === 'canceled') {
+            if ($result === 'void' || $result === 'cancelled' || $result === 'canceled' || $status === 'cancel') {
                 $hasVoidOrCancelled = true;
             }
             if ($result !== 'lose') {
@@ -122,10 +127,10 @@ class PromotionService
             $reasons[] = 'All selections must be a full loss';
         }
         if (!$allMarketsEligible) {
-            $reasons[] = 'Only handicap or over/under full-time markets are eligible';
+            $reasons[] = 'นับเฉพาะตลาดแฮนดิแคปหรือสูง/ต่ำเท่านั้น';
         }
         if (!$allPeriodsEligible) {
-            $reasons[] = 'Only full-time markets are eligible';
+            $reasons[] = 'นับเฉพาะเต็มเวลา (full_time) เท่านั้น';
         }
         if (!$allOddsEligible) {
             $reasons[] = 'Each selection odds must be >= ' . rtrim(rtrim(number_format($minOdds, 2, '.', ''), '0'), '.');
