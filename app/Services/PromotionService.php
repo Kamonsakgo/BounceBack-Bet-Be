@@ -751,7 +751,7 @@ class PromotionService
         return $reasons;
     }
 
-จั    /**
+    /**
      * บันทึกการจ่าย
      */
     private function recordPayout($promotion, $userId, $amount, $transactionId = null)
