@@ -464,20 +464,7 @@ class PromotionService
             ];
         }
 
-        // ตรวจสอบ global_quota (จำนวนครั้งทั้งหมดในระบบ)
-        if (!empty($promotion->global_quota)) {
-            $totalUsageAll = DB::table('promotion_payouts')
-                ->where('promotion_id', $promotion->id)
-                ->count();
-            if ($totalUsageAll >= (int)$promotion->global_quota) {
-                return [
-                    'success' => false,
-                    'reasons' => ['โปรโมชันถึงจำนวนครั้งสูงสุดของระบบแล้ว'],
-                    'payout' => 0,
-                    'transaction_id' => null
-                ];
-            }
-        }
+        // หมายเหตุ: การตรวจ global_quota จะทำแบบ remaining counter ภายใน transaction ด้านล่าง
 
         // ตรวจสอบเงื่อนไขเวลาในตาราง promotions (schedule_days, schedule_start_time, schedule_end_time)
         $currentDayOfWeek = $now->dayOfWeek; // 0=อาทิตย์, 1=จันทร์, ..., 6=เสาร์
@@ -525,11 +512,15 @@ class PromotionService
         // ตรวจสอบ caps (ต่อบิล/ต่อวัน/ต่อผู้ใช้/งบรวม)
         $payoutAmount = $this->applyCaps($promotion, $payoutAmount, $userId);
 
-        // หากถูกจำกัดจนเป็น 0 ไม่ต้องบันทึก
+        // หากถูกจำกัดจนเป็น 0 ไม่ต้องบันทึก และแจ้งเหตุผลให้ชัดเจน
         if ($payoutAmount <= 0) {
+            $capReasons = $this->getCapFailureReasons($promotion, $userId, (float)$amount);
+            if (empty($capReasons)) {
+                $capReasons = ['จำนวนเงินคำนวณหลังจำกัดเป็น 0 (งบ/เพดานครบแล้ว)'];
+            }
             return [
                 'success' => false,
-                'reasons' => ['จำนวนเงินคำนวณหลังจำกัดเป็น 0 (งบ/เพดานครบแล้ว)'],
+                'reasons' => $capReasons,
                 'payout' => 0,
                 'transaction_id' => null
             ];
@@ -540,30 +531,30 @@ class PromotionService
             // ล็อกแถวโปรโมชัน
             $locked = DB::table('promotions')->where('id', $promotion->id)->lockForUpdate()->first();
 
-            // ตรวจซ้ำ global_quota แบบทันที
-            if (!empty($locked->global_quota) && (int)$locked->global_quota <= 0) {
-                return [
-                    'success' => false,
-                    'reasons' => ['โปรโมชันถึงจำนวนครั้งสูงสุดของระบบแล้ว'],
-                    'payout' => 0,
-                    'transaction_id' => null
-                ];
+            // ตรวจซ้ำ global_quota แบบ remaining counter (ใช้ค่าที่เหลือจริงในคอลัมน์)
+            if (!is_null($locked->global_quota)) {
+                if ((int)$locked->global_quota <= 0) {
+                    return [
+                        'success' => false,
+                        'reasons' => ['โปรโมชันถึงจำนวนครั้งสูงสุดของระบบแล้ว'],
+                        'payout' => 0,
+                        'transaction_id' => null
+                    ];
+                }
             }
 
             // ตรวจซ้ำงบรวม และปรับยอดให้ไม่เกินงบคงเหลือ
             $effectivePayout = $payoutAmount;
             if (!is_null($locked->global_budget)) {
                 $remainingBudget = max(0.0, (float)$locked->global_budget);
-                if ($remainingBudget <= 0) {
+                if ($remainingBudget <= 0 || $effectivePayout > $remainingBudget) {
+                    $capReasons = $this->getCapFailureReasons($locked, $userId, (float)$effectivePayout);
                     return [
                         'success' => false,
-                        'reasons' => ['งบประมาณรวมหมดแล้ว'],
+                        'reasons' => !empty($capReasons) ? $capReasons : ['งบประมาณรวมไม่เพียงพอ'],
                         'payout' => 0,
                         'transaction_id' => null
                     ];
-                }
-                if ($effectivePayout > $remainingBudget) {
-                    $effectivePayout = $remainingBudget;
                 }
             }
 
@@ -692,16 +683,14 @@ class PromotionService
             }
         }
 
-        // Cap งบรวมทั้งระบบ (global_budget)
-        if ($promotion->global_budget) {
-            $totalPaidAll = DB::table('promotion_payouts')
-                ->where('promotion_id', $promotion->id)
-                ->sum('amount');
-            $remainingBudget = (float)$promotion->global_budget - (float)$totalPaidAll;
+        // Cap งบรวมทั้งระบบ (global_budget) - ใช้ค่าในคอลัมน์เป็นงบคงเหลือ (เรา decrement แล้วใน txn)
+        if (!is_null($promotion->global_budget)) {
+            $remainingBudget = (float)$promotion->global_budget;
             if ($remainingBudget <= 0) {
                 $amount = 0;
             } elseif ($amount > $remainingBudget) {
-                $amount = max(0, $remainingBudget);
+                // ถ้าเหลืองบไม่พอ ให้ถือว่าไม่ผ่าน (ไม่จ่าย)
+                $amount = 0;
             }
         }
 
@@ -709,6 +698,60 @@ class PromotionService
     }
 
     /**
+     * สร้างข้อความอธิบายเหตุผลกรณีติดเพดาน/งบ ไม่สามารถจ่ายได้เต็มจำนวน
+     */
+    private function getCapFailureReasons($promotion, $userId, $desiredAmount)
+    {
+        $reasons = [];
+
+        // ต่อบิล
+        if ($promotion->max_payout_per_bill && $desiredAmount > $promotion->max_payout_per_bill) {
+            $reasons[] = 'เกินเพดานต่อบิล (สูงสุด ' . rtrim(rtrim(number_format((float)$promotion->max_payout_per_bill, 2, '.', ''), '0'), '.') . ')';
+        }
+
+        // ต่อวัน
+        if ($promotion->max_payout_per_day) {
+            $todayPayout = DB::table('promotion_payouts')
+                ->where('promotion_id', $promotion->id)
+                ->where('user_id', $userId)
+                ->whereDate('created_at', today())
+                ->sum('amount');
+            $remaining = (float)$promotion->max_payout_per_day - (float)$todayPayout;
+            if ($remaining <= 0) {
+                $reasons[] = 'ถึงเพดานต่อวันแล้ว (สูงสุด ' . rtrim(rtrim(number_format((float)$promotion->max_payout_per_day, 2, '.', ''), '0'), '.') . ')';
+            } elseif ($desiredAmount > $remaining) {
+                $reasons[] = 'โควตาต่อวันคงเหลือ ' . rtrim(rtrim(number_format($remaining, 2, '.', ''), '0'), '.') . ' ไม่พอสำหรับการจ่าย ' . rtrim(rtrim(number_format($desiredAmount, 2, '.', ''), '0'), '.');
+            }
+        }
+
+        // ต่อผู้ใช้รวม
+        if ($promotion->max_payout_per_user) {
+            $totalPayout = DB::table('promotion_payouts')
+                ->where('promotion_id', $promotion->id)
+                ->where('user_id', $userId)
+                ->sum('amount');
+            $remaining = (float)$promotion->max_payout_per_user - (float)$totalPayout;
+            if ($remaining <= 0) {
+                $reasons[] = 'ถึงเพดานต่อผู้ใช้แล้ว (สูงสุด ' . rtrim(rtrim(number_format((float)$promotion->max_payout_per_user, 2, '.', ''), '0'), '.') . ')';
+            } elseif ($desiredAmount > $remaining) {
+                $reasons[] = 'โควตาต่อผู้ใช้คงเหลือ ' . rtrim(rtrim(number_format($remaining, 2, '.', ''), '0'), '.') . ' ไม่พอสำหรับการจ่าย ' . rtrim(rtrim(number_format($desiredAmount, 2, '.', ''), '0'), '.');
+            }
+        }
+
+        // งบรวมทั้งระบบ (ใช้ค่าที่คงเหลือในคอลัมน์)
+        if (!is_null($promotion->global_budget)) {
+            $remainingBudget = (float)$promotion->global_budget;
+            if ($remainingBudget <= 0) {
+                $reasons[] = 'งบประมาณรวมหมดแล้ว';
+            } elseif ($desiredAmount > $remainingBudget) {
+                $reasons[] = 'งบประมาณรวมคงเหลือ ' . rtrim(rtrim(number_format($remainingBudget, 2, '.', ''), '0'), '.') . ' ไม่พอสำหรับการจ่าย ' . rtrim(rtrim(number_format($desiredAmount, 2, '.', ''), '0'), '.');
+            }
+        }
+
+        return $reasons;
+    }
+
+จั    /**
      * บันทึกการจ่าย
      */
     private function recordPayout($promotion, $userId, $amount, $transactionId = null)
