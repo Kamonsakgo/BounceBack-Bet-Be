@@ -15,6 +15,7 @@ class PromotionRequest extends FormRequest
     {
         return [
             'stake' => ['required', 'numeric', 'min:1'],
+            'user_id' => ['required', 'integer', 'min:1'],
             'selections' => ['required', 'array', 'min:1'],
             'selections.*.result' => ['required', 'string', 'in:win,lose,void,cancelled,canceled,draw'],
             'selections.*.market' => ['nullable', 'string'],
@@ -24,6 +25,8 @@ class PromotionRequest extends FormRequest
             'selections.*.sport' => ['required', 'string'],
             'selections.*.status' => ['nullable', 'string', 'in:accept,cancel'],
             'promotion_id' => ['nullable', 'integer'],
+            'bill_id' => ['nullable', 'string'],
+            'transaction_id' => ['nullable', 'string'],
         ];
     }
 }

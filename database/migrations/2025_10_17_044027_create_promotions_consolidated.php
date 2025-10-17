@@ -56,28 +56,24 @@ return new class extends Migration
         Schema::create('promotion_payouts', function (Blueprint $table) {
             $table->id()->comment('รหัสการจ่ายเงิน');
             $table->unsignedBigInteger('promotion_id')->nullable()->comment('รหัสโปรโมชันที่เกี่ยวข้อง');
-            $table->string('promotion_code')->nullable()->comment('รหัสโปรโมชัน (สำหรับ backward compatibility)');
             $table->unsignedBigInteger('user_id')->nullable()->comment('รหัสผู้ใช้ที่ได้รับเงิน');
             $table->string('bill_id')->nullable()->comment('รหัสบิลที่เกี่ยวข้อง');
+            $table->string('transaction_id')->nullable()->comment('รหัสธุรกรรมการจ่าย');
+            $table->string('status')->default('completed')->comment('สถานะการจ่าย เช่น completed, pending, failed');
             $table->decimal('amount', 12, 2)->comment('จำนวนเงินที่จ่าย');
             $table->timestamps(); // วันที่สร้างและแก้ไข
 
-            $table->index(['promotion_code'], 'promotion_payouts_code_idx')->comment('ดัชนีสำหรับค้นหาตามรหัสโปรโมชัน');
+            $table->index(['promotion_id'], 'promotion_payouts_promo_idx')->comment('ดัชนีสำหรับค้นหาตามโปรโมชัน');
             $table->index(['user_id'], 'promotion_payouts_user_idx')->comment('ดัชนีสำหรับค้นหาตามผู้ใช้');
             $table->index(['created_at'], 'promotion_payouts_date_idx')->comment('ดัชนีสำหรับค้นหาตามวันที่');
+            $table->index(['promotion_id', 'user_id'], 'promotion_payouts_promo_user_idx')->comment('ดัชนีสำหรับตรวจสอบยอดรวมต่อผู้ใช้/โปรโมชัน');
+            $table->index(['promotion_id', 'user_id', 'created_at'], 'promotion_payouts_promo_user_date_idx')->comment('ดัชนีสำหรับตรวจสอบยอดรวมต่อวันต่อผู้ใช้/โปรโมชัน');
+            // unique constraints
+            $table->unique(['promotion_id', 'user_id', 'bill_id'], 'payout_unique_promo_user_bill');
+            $table->unique(['transaction_id'], 'payout_unique_txn');
         });
 
-        // สร้างตาราง promotion_schedules สำหรับจัดการตารางเวลา
-        Schema::create('promotion_schedules', function (Blueprint $table) {
-            $table->id()->comment('รหัสตารางเวลา');
-            $table->unsignedBigInteger('promotion_id')->comment('รหัสโปรโมชันที่เกี่ยวข้อง');
-            $table->unsignedTinyInteger('day_of_week')->comment('วันในสัปดาห์ (0=อาทิตย์, 1=จันทร์, 2=อังคาร, 3=พุธ, 4=พฤหัสบดี, 5=ศุกร์, 6=เสาร์)');
-            $table->time('start_time')->comment('เวลาเริ่มต้นในวันนั้น');
-            $table->time('end_time')->comment('เวลาสิ้นสุดในวันนั้น');
-            $table->timestamps(); // วันที่สร้างและแก้ไข
-
-            $table->index(['promotion_id', 'day_of_week'], 'promotion_schedules_promo_day_idx')->comment('ดัชนีสำหรับค้นหาตามโปรโมชันและวัน');
-        });
+        // ไม่ได้ใช้ตาราง promotion_schedules อีกต่อไป
     }
 
     /**
@@ -85,7 +81,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('promotion_schedules');
         Schema::dropIfExists('promotion_payouts');
         Schema::dropIfExists('promotions');
     }
