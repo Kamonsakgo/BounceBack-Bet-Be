@@ -92,6 +92,14 @@ class PromotionService
         $minOddsVal = $settings['min_odds'] ?? null;
         $minOdds = is_numeric($minOddsVal) ? (float)$minOddsVal : 1.85;
 
+        // เช็ค max_refund_amount
+        $maxRefundAmountVal = $settings['max_refund_amount'] ?? null;
+        $maxRefundAmount = is_numeric($maxRefundAmountVal) ? (float)$maxRefundAmountVal : null;
+
+        // เช็ค min_loss_per_pair
+        $minLossPerPairVal = $settings['min_loss_per_pair'] ?? null;
+        $minLossPerPair = is_numeric($minLossPerPairVal) ? (float)$minLossPerPairVal : null;
+
         // allowed_markets อาจมาเป็น array (จาก promotions.settings) หรือ string csv (จาก key-value)
         $allowedMarketsRaw = $settings['allowed_markets'] ?? null;
         if (is_array($allowedMarketsRaw)) {
@@ -140,14 +148,7 @@ class PromotionService
 
         // ตัวคูณเครดิตคืนกรณี "ผิดหมดทุกคู่"
         // รองรับรูปแบบจาก promotions.settings.multipliers (array) หรือจาก key-value: multiplier_5 ... multiplier_10
-        $defaultMultipliers = [
-            5 => 2.0,
-            6 => 5.0,
-            7 => 7.0,
-            8 => 10.0,
-            9 => 15.0,
-            10 => 30.0,
-        ];
+
         $multipliersByCount = [];
         
         // ตรวจสอบ tiers ก่อน
@@ -192,6 +193,7 @@ class PromotionService
         $allMarketsEligible = true;
         $allPeriodsEligible = true;
         $allOddsEligible = true;
+        $allLossPerPairEligible = true;
 
         foreach ($selections as $i => $sel) {
             $result = strtolower((string)($sel['result'] ?? ''));
@@ -226,6 +228,14 @@ class PromotionService
             if ($odds < $minOdds) {
                 $allOddsEligible = false;
             }
+            
+            // เช็ค min_loss_per_pair: การขาดทุนต่อคู่ต้อง >= minLossPerPair
+            if ($minLossPerPair !== null && $result === 'lose') {
+                $lossPerPair = $stake / count($selections); // แบ่ง stake เท่าๆ กันทุกคู่
+                if ($lossPerPair < $minLossPerPair) {
+                    $allLossPerPairEligible = false;
+                }
+            }
         }
 
         if ($hasVoidOrCancelled) {
@@ -245,6 +255,10 @@ class PromotionService
         if (!$allOddsEligible) {
             $minOddsStr = rtrim(rtrim(number_format($minOdds, 2, '.', ''), '0'), '.');
             $reasons[] = 'ค่าน้ำของแต่ละคู่ต้อง >= ' . $minOddsStr . ' | Each selection odds must be >= ' . $minOddsStr;
+        }
+        if (!$allLossPerPairEligible) {
+            $minLossStr = rtrim(rtrim(number_format($minLossPerPair, 2, '.', ''), '0'), '.');
+            $reasons[] = 'การขาดทุนต่อคู่ต้อง >= ' . $minLossStr . ' | Loss per pair must be >= ' . $minLossStr;
         }
 
         $count = is_array($selections) ? count($selections) : 0;
@@ -282,6 +296,11 @@ class PromotionService
         $cappedRefund = $refund;
         if ($maxPayoutPerBill !== null) {
             $cappedRefund = min($cappedRefund, $maxPayoutPerBill);
+        }
+        
+        // เช็ค max_refund_amount จาก settings
+        if ($maxRefundAmount !== null) {
+            $cappedRefund = min($cappedRefund, $maxRefundAmount);
         }
 
         return [
