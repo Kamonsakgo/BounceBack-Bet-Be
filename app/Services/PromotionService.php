@@ -84,6 +84,39 @@ class PromotionService
             }
         }
 
+        // ตรวจสอบเงื่อนไขเวลาในตาราง promotions (schedule_days, schedule_start_time, schedule_end_time)
+        if ($activePromotion) {
+            $now = now();
+            $currentDayOfWeek = $now->dayOfWeek; // 0=อาทิตย์, 1=จันทร์, ..., 6=เสาร์
+            $currentTime = $now->format('H:i:s');
+            
+            // เช็ค schedule_days (JSON array)
+            if ($activePromotion->schedule_days) {
+                $scheduleDays = json_decode($activePromotion->schedule_days, true);
+                if (is_array($scheduleDays) && !empty($scheduleDays)) {
+                    // แปลง day of week ให้ตรงกับ format ที่เก็บ (1=จันทร์, 2=อังคาร, ..., 7=อาทิตย์)
+                    $dayMapping = [0 => 7, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6]; // 0=อาทิตย์ -> 7
+                    $currentDay = $dayMapping[$currentDayOfWeek];
+                    
+                    if (!in_array($currentDay, $scheduleDays)) {
+                        $dayNames = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
+                        $allowedDays = array_map(fn($d) => $dayNames[$d] ?? $d, $scheduleDays);
+                        $reasons[] = 'โปรโมชันไม่เปิดในวันนี้ (เปิดเฉพาะ: ' . implode(', ', $allowedDays) . ') | Promotion not available today';
+                    }
+                }
+            }
+            
+            // เช็ค schedule_start_time และ schedule_end_time
+            if ($activePromotion->schedule_start_time && $activePromotion->schedule_end_time) {
+                $startTime = $activePromotion->schedule_start_time;
+                $endTime = $activePromotion->schedule_end_time;
+                
+                if ($currentTime < $startTime || $currentTime > $endTime) {
+                    $reasons[] = 'เวลาไม่อยู่ในช่วงเปิดโปรโมชัน (เปิด: ' . $startTime . ' - ' . $endTime . ') | Promotion time not available';
+                }
+            }
+        }
+
         // 2) ไม่ fallback ไปที่ promotion_settings อีกต่อไป (เลิกใช้ตารางนั้น)
 
         $minStakeVal = $settings['min_stake'] ?? null;
@@ -100,8 +133,8 @@ class PromotionService
         $minLossPerPairVal = $settings['min_loss_per_pair'] ?? null;
         $minLossPerPair = is_numeric($minLossPerPairVal) ? (float)$minLossPerPairVal : null;
 
-        // allowed_markets อาจมาเป็น array (จาก promotions.settings) หรือ string csv (จาก key-value)
-        $allowedMarketsRaw = $settings['allowed_markets'] ?? null;
+        // market_type หรือ market_types อาจมาเป็น array (จาก promotions.settings) หรือ string csv (จาก key-value)
+        $allowedMarketsRaw = $settings['market_type'] ?? $settings['market_types'] ?? null;
         if (is_array($allowedMarketsRaw)) {
             $allowedMarkets = array_values(array_filter(array_map(fn($m) => strtolower(trim((string)$m)), $allowedMarketsRaw)));
         } elseif (is_string($allowedMarketsRaw) && trim($allowedMarketsRaw) !== '') {
@@ -262,7 +295,28 @@ class PromotionService
         }
 
         $count = is_array($selections) ? count($selections) : 0;
-        $multiplier = $multipliersByCount[$count] ?? 0.0;
+        // เลือกตัวคูณตามจำนวนคู่: ถ้าเกิน tier สูงสุด ให้ใช้ tier สูงสุด
+        if (!empty($multipliersByCount)) {
+            $eligibleCounts = array_keys($multipliersByCount);
+            sort($eligibleCounts, SORT_NUMERIC);
+            $chosenCount = null;
+            foreach ($eligibleCounts as $eligibleCount) {
+                if ($eligibleCount <= $count) {
+                    $chosenCount = $eligibleCount;
+                } else {
+                    break;
+                }
+            }
+            if ($chosenCount === null) {
+                // จำนวนน้อยกว่าขั้นต่ำใดๆ -> ไม่เข้าเงื่อนไข
+                $multiplier = 0.0;
+            } else {
+                // ถ้ามากกว่าขั้นสูงสุด chosenCount จะเป็นขั้นสูงสุดโดยอัตโนมัติ
+                $multiplier = (float)$multipliersByCount[$chosenCount];
+            }
+        } else {
+            $multiplier = 0.0;
+        }
         
         
         if ($multiplier <= 0.0) {
@@ -394,6 +448,46 @@ class PromotionService
                 'payout' => 0,
                 'transaction_id' => null
             ];
+        }
+
+        // ตรวจสอบเงื่อนไขเวลาในตาราง promotions (schedule_days, schedule_start_time, schedule_end_time)
+        $currentDayOfWeek = $now->dayOfWeek; // 0=อาทิตย์, 1=จันทร์, ..., 6=เสาร์
+        $currentTime = $now->format('H:i:s');
+        
+        // เช็ค schedule_days (JSON array)
+        if ($promotion->schedule_days) {
+            $scheduleDays = json_decode($promotion->schedule_days, true);
+            if (is_array($scheduleDays) && !empty($scheduleDays)) {
+                // แปลง day of week ให้ตรงกับ format ที่เก็บ (1=จันทร์, 2=อังคาร, ..., 7=อาทิตย์)
+                $dayMapping = [0 => 7, 1 => 1, 2 => 2, 3 => 3, 4 => 4, 5 => 5, 6 => 6]; // 0=อาทิตย์ -> 7
+                $currentDay = $dayMapping[$currentDayOfWeek];
+                
+                if (!in_array($currentDay, $scheduleDays)) {
+                    $dayNames = ['', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
+                    $allowedDays = array_map(fn($d) => $dayNames[$d] ?? $d, $scheduleDays);
+                    return [
+                        'success' => false,
+                        'reasons' => ['โปรโมชันไม่เปิดในวันนี้ (เปิดเฉพาะ: ' . implode(', ', $allowedDays) . ')'],
+                        'payout' => 0,
+                        'transaction_id' => null
+                    ];
+                }
+            }
+        }
+        
+        // เช็ค schedule_start_time และ schedule_end_time
+        if ($promotion->schedule_start_time && $promotion->schedule_end_time) {
+            $startTime = $promotion->schedule_start_time;
+            $endTime = $promotion->schedule_end_time;
+            
+            if ($currentTime < $startTime || $currentTime > $endTime) {
+                return [
+                    'success' => false,
+                    'reasons' => ['เวลาไม่อยู่ในช่วงเปิดโปรโมชัน (เปิด: ' . $startTime . ' - ' . $endTime . ')'],
+                    'payout' => 0,
+                    'transaction_id' => null
+                ];
+            }
         }
 
         // คำนวณการจ่ายตาม type
