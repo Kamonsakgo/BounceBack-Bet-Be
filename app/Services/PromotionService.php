@@ -106,9 +106,6 @@ class PromotionService
         $minOddsVal = $settings['min_odds'] ?? null;
         $minOdds = is_numeric($minOddsVal) ? (float)$minOddsVal : 1.85;
 
-        // เช็ค max_refund_amount
-        $maxRefundAmountVal = $settings['max_refund_amount'] ?? null;
-        $maxRefundAmount = is_numeric($maxRefundAmountVal) ? (float)$maxRefundAmountVal : null;
 
         // เช็ค min_loss_per_pair
         $minLossPerPairVal = $settings['min_loss_per_pair'] ?? null;
@@ -164,6 +161,16 @@ class PromotionService
         // รองรับรูปแบบจาก promotions.settings.multipliers (array) หรือจาก key-value: multiplier_5 ... multiplier_10
 
         $multipliersByCount = [];
+        
+        // Default multipliers สำหรับ fallback
+        $defaultMultipliers = [
+            5 => 2.0,
+            6 => 5.0,
+            7 => 7.0,
+            8 => 10.0,
+            9 => 15.0,
+            10 => 30.0
+        ];
         
         // ตรวจสอบ tiers ก่อน
         if (isset($settings['tiers']) && is_array($settings['tiers'])) {
@@ -333,10 +340,6 @@ class PromotionService
             $cappedRefund = min($cappedRefund, $maxPayoutPerBill);
         }
         
-        // เช็ค max_refund_amount จาก settings
-        if ($maxRefundAmount !== null) {
-            $cappedRefund = min($cappedRefund, $maxRefundAmount);
-        }
 
         // เช็ค user_limit_total และ user_limit_per_day
         if ($activePromotion && $eligible) {
