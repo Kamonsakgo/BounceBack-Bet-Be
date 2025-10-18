@@ -128,17 +128,24 @@ class PromotionService
 
         // ดึงรายการ period ที่อนุญาตจากคอลัมน์ match_periods
         $allowedPeriods = [];
+        $allowAllPeriods = false;
+        
         if ($activePromotion && $activePromotion->match_periods) {
             $periods = json_decode($activePromotion->match_periods, true);
             if (is_array($periods)) {
                 foreach ($periods as $period) {
-                    $allowedPeriods[] = strtolower(trim($period));
+                    $period = strtolower(trim($period));
+                    if ($period === 'all') {
+                        $allowAllPeriods = true;
+                        break;
+                    }
+                    $allowedPeriods[] = $period;
                 }
             }
         }
         
         // ถ้าไม่มีข้อมูลใน match_periods ให้ใช้ default
-        if (empty($allowedPeriods)) {
+        if (empty($allowedPeriods) && !$allowAllPeriods) {
             $allowedPeriods = ['full_time'];
         }
 
@@ -260,7 +267,7 @@ class PromotionService
                 $allMarketsEligible = false;
             }
             // ตรวจสอบ period ว่าอยู่ในรายการที่อนุญาตหรือไม่
-            if (!in_array($period, $allowedPeriods, true)) {
+            if (!$allowAllPeriods && !in_array($period, $allowedPeriods, true)) {
                 $allPeriodsEligible = false;
             }
             if ($odds < $minOdds) {
@@ -288,8 +295,12 @@ class PromotionService
             $reasons[] = 'ตลาดไม่เข้าเงื่อนไข (อนุญาต: ' . $mkStr . ') | Only allowed markets: ' . $mkStr;
         }
         if (!$allPeriodsEligible) {
-            $allowedPeriodsStr = implode(', ', $allowedPeriods);
-            $reasons[] = 'Period ไม่เข้าเงื่อนไข (อนุญาต: ' . $allowedPeriodsStr . ') | Period not eligible (allowed: ' . $allowedPeriodsStr . ')';
+            if ($allowAllPeriods) {
+                $reasons[] = 'Period ไม่เข้าเงื่อนไข (อนุญาต: ทุก period) | Period not eligible (allowed: all periods)';
+            } else {
+                $allowedPeriodsStr = implode(', ', $allowedPeriods);
+                $reasons[] = 'Period ไม่เข้าเงื่อนไข (อนุญาต: ' . $allowedPeriodsStr . ') | Period not eligible (allowed: ' . $allowedPeriodsStr . ')';
+            }
         }
         if (!$allOddsEligible) {
             $minOddsStr = rtrim(rtrim(number_format($minOdds, 2, '.', ''), '0'), '.');
