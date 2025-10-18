@@ -28,6 +28,7 @@ class PromotionSettingSeeder extends Seeder
                     'max_payout_per_bill' => 10000.00,
                     'max_payout_per_day' => 50000.00,
                     'max_payout_per_user' => 20000.00,
+                    'match_periods' => json_encode(['full_time', 'first_half', 'second_half']),
                     'settings' => json_encode([
                         'min_stake' => 100,
                         'min_odds' => 1.85,

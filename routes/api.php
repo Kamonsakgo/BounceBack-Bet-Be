@@ -28,6 +28,11 @@ Route::post('/promotions', function (Request $request) {
         $data['settings'] = json_encode($data['settings']);
     }
     
+    // Handle match_periods if it's an array
+    if (isset($data['match_periods']) && is_array($data['match_periods'])) {
+        $data['match_periods'] = json_encode($data['match_periods']);
+    }
+    
     // Set default values
     $data['is_active'] = $data['is_active'] ?? true;
     $data['is_stackable'] = $data['is_stackable'] ?? false;
@@ -64,6 +69,11 @@ Route::put('/promotions/{id}', function (Request $request, $id) {
     // Handle settings if it's an array
     if (isset($data['settings']) && is_array($data['settings'])) {
         $data['settings'] = json_encode($data['settings']);
+    }
+    
+    // Handle match_periods if it's an array
+    if (isset($data['match_periods']) && is_array($data['match_periods'])) {
+        $data['match_periods'] = json_encode($data['match_periods']);
     }
     
     $data['updated_at'] = now();

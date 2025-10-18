@@ -43,6 +43,9 @@ return new class extends Migration
             $table->decimal('max_payout_per_day', 12, 2)->nullable()->comment('จำนวนเงินสูงสุดที่จ่ายได้ต่อวัน');
             $table->decimal('max_payout_per_user', 12, 2)->nullable()->comment('จำนวนเงินสูงสุดที่จ่ายให้ผู้ใช้ 1 คนได้ทั้งหมด');
 
+            // Match periods - รายการ period ที่อนุญาต
+            $table->json('match_periods')->nullable()->comment('รายการ period ที่อนุญาต เช่น ["full_time", "first_half"]');
+
             $table->timestamps(); // วันที่สร้างและแก้ไข
             $table->softDeletes(); // การลบแบบ soft delete
 

@@ -126,6 +126,22 @@ class PromotionService
         $requiredPeriodVal = $settings['required_period'] ?? null;
         $requiredPeriod = is_string($requiredPeriodVal) && $requiredPeriodVal !== '' ? strtolower($requiredPeriodVal) : 'full_time';
 
+        // ดึงรายการ period ที่อนุญาตจากคอลัมน์ match_periods
+        $allowedPeriods = [];
+        if ($activePromotion && $activePromotion->match_periods) {
+            $periods = json_decode($activePromotion->match_periods, true);
+            if (is_array($periods)) {
+                foreach ($periods as $period) {
+                    $allowedPeriods[] = strtolower(trim($period));
+                }
+            }
+        }
+        
+        // ถ้าไม่มีข้อมูลใน match_periods ให้ใช้ default
+        if (empty($allowedPeriods)) {
+            $allowedPeriods = ['full_time'];
+        }
+
         // อ่านจำนวนคู่ขั้นต่ำจากฐานข้อมูล พร้อม fallback
         $value = $settings['min_selections'] ?? null;
         if (is_numeric($value)) {
@@ -243,7 +259,8 @@ class PromotionService
             if (!$allowAllMarkets && !in_array($market, $allowedMarkets, true)) {
                 $allMarketsEligible = false;
             }
-            if ($period !== $requiredPeriod) {
+            // ตรวจสอบ period ว่าอยู่ในรายการที่อนุญาตหรือไม่
+            if (!in_array($period, $allowedPeriods, true)) {
                 $allPeriodsEligible = false;
             }
             if ($odds < $minOdds) {
@@ -271,7 +288,8 @@ class PromotionService
             $reasons[] = 'ตลาดไม่เข้าเงื่อนไข (อนุญาต: ' . $mkStr . ') | Only allowed markets: ' . $mkStr;
         }
         if (!$allPeriodsEligible) {
-            $reasons[] = 'นับเฉพาะเต็มเวลา (full_time) เท่านั้น | Only full-time markets are eligible';
+            $allowedPeriodsStr = implode(', ', $allowedPeriods);
+            $reasons[] = 'Period ไม่เข้าเงื่อนไข (อนุญาต: ' . $allowedPeriodsStr . ') | Period not eligible (allowed: ' . $allowedPeriodsStr . ')';
         }
         if (!$allOddsEligible) {
             $minOddsStr = rtrim(rtrim(number_format($minOdds, 2, '.', ''), '0'), '.');
